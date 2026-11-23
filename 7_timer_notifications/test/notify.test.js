@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const { notifyTimerDone, formatDuration } = require('../notify');
+const { notifyTimerDone, formatDuration, selectPlayer } = require('../notify');
 
 const ICON_PATH = path.join(__dirname, '..', 'assets', 'timer.png');
 
@@ -72,4 +72,76 @@ test('notifyTimerDone передаёт ошибку демона уведомл�
 
 test('иконка уведомления существует', () => {
   assert.equal(fs.existsSync(ICON_PATH), true);
+});
+
+test('selectPlayer: с графической сессией предпочитает canberra', () => {
+  const player = selectPlayer({
+    hasDisplay: true,
+    canberra: '/usr/bin/canberra-gtk-play',
+    paplay: '/usr/bin/paplay',
+    pwPlay: '/usr/bin/pw-play',
+    soundFile: '/usr/share/sounds/freedesktop/stereo/alarm-clock-elapsed.oga',
+  });
+
+  assert.deepEqual(player, {
+    command: '/usr/bin/canberra-gtk-play',
+    args: ['-i', 'alarm-clock-elapsed'],
+  });
+});
+
+test('selectPlayer: без DISPLAY использует paplay', () => {
+  const player = selectPlayer({
+    hasDisplay: false,
+    canberra: '/usr/bin/canberra-gtk-play',
+    paplay: '/usr/bin/paplay',
+    pwPlay: '/usr/bin/pw-play',
+    soundFile: '/usr/share/sounds/freedesktop/stereo/alarm-clock-elapsed.oga',
+  });
+
+  assert.deepEqual(player, {
+    command: '/usr/bin/paplay',
+    args: ['/usr/share/sounds/freedesktop/stereo/alarm-clock-elapsed.oga'],
+  });
+});
+
+test('selectPlayer: без paplay использует pw-play', () => {
+  const player = selectPlayer({
+    hasDisplay: false,
+    canberra: null,
+    paplay: null,
+    pwPlay: '/usr/bin/pw-play',
+    soundFile: '/usr/share/sounds/freedesktop/stereo/alarm-clock-elapsed.oga',
+  });
+
+  assert.deepEqual(player, {
+    command: '/usr/bin/pw-play',
+    args: ['/usr/share/sounds/freedesktop/stereo/alarm-clock-elapsed.oga'],
+  });
+});
+
+test('selectPlayer: без звукового файла остаётся canberra', () => {
+  const player = selectPlayer({
+    hasDisplay: false,
+    canberra: '/usr/bin/canberra-gtk-play',
+    paplay: '/usr/bin/paplay',
+    pwPlay: '/usr/bin/pw-play',
+    soundFile: null,
+  });
+
+  assert.deepEqual(player, {
+    command: '/usr/bin/canberra-gtk-play',
+    args: ['-i', 'alarm-clock-elapsed'],
+  });
+});
+
+test('selectPlayer: ничего не найдено — null', () => {
+  const player = selectPlayer({
+    hasDisplay: false,
+    canberra: null,
+    paplay: null,
+    pwPlay: null,
+    soundFile: null,
+  });
+
+  assert.equal(player, null);
 });

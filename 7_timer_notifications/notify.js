@@ -1,10 +1,21 @@
 'use strict';
 
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const notifier = require('node-notifier');
 
 const ICON_PATH = path.join(__dirname, 'assets', 'timer.png');
+
+const SOUND_EVENT = 'alarm-clock-elapsed';
+const SOUND_EXTENSIONS = ['oga', 'ogg', 'wav'];
+const DEFAULT_SOUND_FILES = [
+  '/usr/share/sounds/freedesktop/stereo/alarm-clock-elapsed.oga',
+  '/usr/share/sounds/freedesktop/stereo/alarm-clock-elapsed.ogg',
+  '/usr/share/sounds/ubuntu/stereo/alarm-clock-elapsed.oga',
+  '/usr/share/sounds/Yaru/stereo/alarm-clock-elapsed.oga',
+];
 
 const SECONDS_PER_MINUTE = 60;
 const MINUTES_PER_HOUR = 60;
@@ -61,6 +72,106 @@ function formatDuration(ms) {
 }
 
 /**
+ * Ищет исполняемый файл в PATH.
+ */
+function findExecutable(name) {
+  const dirs = (process.env.PATH || '').split(path.delimiter);
+
+  for (const dir of dirs) {
+    if (!dir) {
+      continue;
+    }
+
+    const candidate = path.join(dir, name);
+
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {
+      // Нет файла или нет прав на запуск — пробуем следующий каталог.
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Ищет звук alarm-clock-elapsed в системных звуковых темах.
+ */
+function findSoundFile() {
+  for (const file of DEFAULT_SOUND_FILES) {
+    if (fs.existsSync(file)) {
+      return file;
+    }
+  }
+
+  const dataDirs = (process.env.XDG_DATA_DIRS || '/usr/local/share:/usr/share').split(path.delimiter);
+  const roots = [
+    path.join(os.homedir(), '.local', 'share', 'sounds'),
+    ...dataDirs.map((dir) => path.join(dir, 'sounds')),
+  ];
+
+  for (const root of roots) {
+    let themes;
+
+    try {
+      themes = fs.readdirSync(root, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const theme of themes) {
+      if (!theme.isDirectory()) {
+        continue;
+      }
+
+      for (const ext of SOUND_EXTENSIONS) {
+        const file = path.join(root, theme.name, 'stereo', `${SOUND_EVENT}.${ext}`);
+
+        if (fs.existsSync(file)) {
+          return file;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Выбирает, чем проиграть звук на Linux.
+ *
+ * canberra-gtk-play умеет играть события звуковой темы, но это GTK-программа:
+ * без DISPLAY/WAYLAND_DISPLAY она завершается с «Cannot open display».
+ * Поэтому в headless-окружении используем paplay или pw-play с файлом звука.
+ */
+function selectPlayer({
+  hasDisplay = Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY),
+  canberra = findExecutable('canberra-gtk-play'),
+  paplay = findExecutable('paplay'),
+  pwPlay = findExecutable('pw-play'),
+  soundFile = findSoundFile(),
+} = {}) {
+  if (hasDisplay && canberra) {
+    return { command: canberra, args: ['-i', SOUND_EVENT] };
+  }
+
+  if (soundFile && paplay) {
+    return { command: paplay, args: [soundFile] };
+  }
+
+  if (soundFile && pwPlay) {
+    return { command: pwPlay, args: [soundFile] };
+  }
+
+  if (canberra) {
+    return { command: canberra, args: ['-i', SOUND_EVENT] };
+  }
+
+  return null;
+}
+
+/**
  * На Linux node-notifier не проигрывает звук, поэтому зовём системный
  * проигрыватель. Ошибки намеренно игнорируются: звук — необязательная часть.
  */
@@ -69,8 +180,15 @@ function playAlarmSound() {
     return;
   }
 
+  const player = selectPlayer();
+
+  if (!player) {
+    console.warn('Звук недоступен: не найден системный аудиоплеер.');
+    return;
+  }
+
   try {
-    const child = spawn('canberra-gtk-play', ['-i', 'alarm-clock-elapsed'], {
+    const child = spawn(player.command, player.args, {
       stdio: 'ignore',
       detached: true,
     });
@@ -126,4 +244,4 @@ function notifyTimerDone(
   });
 }
 
-module.exports = { notifyTimerDone, formatDuration };
+module.exports = { notifyTimerDone, formatDuration, selectPlayer };
